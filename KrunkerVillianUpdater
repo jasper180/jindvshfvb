@@ -1,0 +1,406 @@
+// ==UserScript==
+// @name         KRUNKVILLAIN - Krunker.io HACK AIMBOT ESP BHOP
+// @namespace    Creator Roogybot - fixed by skidLamer
+// @version      2.0
+// @description  Aimbot, Auto Reload, Auto BHop and Wall Hack for Krunker.io
+// @match        *://krunker.io/*
+// @run-at       document-start
+// @require https://greasyfork.org/scripts/2350-filesaver-js/code/filesaverjs.js?version=6255
+// @grant        none
+// ==/UserScript==
+var krunkVillian = `
+const cStruct = (...keys) => ((...a) => keys.reduce((x, y, z) => {
+    x[y] = a[z];
+    return x
+}, {}))
+class KrunkModule {
+    constructor() {
+        this.allStates = this.allStates();
+        this.index = this.allStates.indexOf(this.initState());
+    }
+    updated() {
+        window.saveVal("utilities_"+this.getName(), this.index);
+    }
+    onTick() {
+        //override
+    }
+    initState() {
+        var value = parseInt(window.getSavedVal("utilities_"+this.getName()) || 0);
+        return this.allStates[value]
+    }
+    onKeyPressed() {
+        this.index++;
+        if (this.index >= this.allStates.length) {
+            this.index = 0;
+        }
+        this.updated();
+    }
+    getState() {
+        return this.allStates[this.index];
+    }
+}
+class AutoAim extends KrunkModule {
+    constructor() {
+        super(...arguments);
+        this.scopingOut = false;
+        this.canShoot = true;
+    }
+    getName() {
+        return 'Auto Aim';
+    }
+    getKey() {
+        return 'I';
+    }
+    allStates() {
+        return ['Off', 'TriggerBot', 'AimAssist'];
+    }
+    onTick() {
+        if (!this.players) {
+            return;
+        }
+        const possibleTargets = this.players
+            .filter(player => {
+                return player.active && (player.inView || this.me.dmgReceived[player.id]) && !player.isYou && (!player.team || player.team !== this.me.team);
+            })
+            .sort((p1, p2) => window.utilities.getDistance(this.me, p1) - window.utilities.getDistance(this.me, p2));
+        let isLockedOn = false;
+        if (possibleTargets.length > 0) {
+            const target = possibleTargets[0];
+            switch (this.getState()) {
+                case 'TriggerBot':
+                    isLockedOn = this.runTriggerBot(target);
+                    break;
+                case 'AimAssist':
+                    isLockedOn = this.runAimAssist(target);
+                    break;
+            }
+        }
+        if (!isLockedOn) {
+            this.control.target = null;
+            if (this.getState() === 'TriggerBot') {
+                this.control.mouseDownL = 0;
+                this.control.mouseDownR = 0;
+            }
+        }
+    }
+    runTriggerBot(target) {
+        if (this.me.didShoot) {
+            this.canShoot = false;
+            setTimeout(() => {
+                this.canShoot = true;
+            }, this.me.weapon.rate);
+        }
+        if (this.control.mouseDownL === 1) {
+            this.control.mouseDownL = 0;
+            this.control.mouseDownR = 0;
+            this.scopingOut = true;
+        }
+        if (this.me.aimVal === 1) {
+            this.scopingOut = false;
+        }
+        if (this.scopingOut || !this.canShoot || this.me.recoilForce > 0.01) {
+            return false;
+        }
+        window.utilities.lookAt(target);
+        if (this.control.mouseDownR === 0) {
+            this.control.mouseDownR = 1;
+        } else if (this.me.aimVal < 0.2) {
+            this.control.mouseDownL = 1 - this.control.mouseDownL;
+        }
+        return true;
+    }
+    runAimAssist(target) {
+        if (this.control.mouseDownR === 1) {
+            window.utilities.lookAt(target);
+            return true;
+        }
+        return false;
+    }
+}
+
+class AutoBHop extends KrunkModule {
+    constructor() {
+        super(...arguments);
+        this.isSliding = false;
+    }
+    getName() {
+        return 'Auto BHop';
+    }
+    getKey() {
+        return 'B';
+    }
+    allStates() {
+        return ['Off', 'Jump', 'SlideJump'];
+    }
+    onTick() {
+        if (!this.me.xVel) return;
+        this.control.keys[32] = !this.control.keys[32];
+        if (this.getState() === 'SlideJump') {
+            if (this.isSliding) {
+                this.inputs[8] = 1;
+                return;
+            }
+            if (this.me.yVel < -0.04 && this.me.canSlide) {
+                this.isSliding = true;
+                setTimeout(() => {
+                    this.isSliding = false;
+                }, 350);
+                this.inputs[8] = 1;
+            }
+        }
+    }
+}
+
+class KrunkVillian {
+    constructor() {
+        this.self;
+        this.inputs;
+        this.world;
+        this.weapons;
+        this.exports;
+        this.control;
+        this.server;
+        this.modules = [];
+        this.toggles = [];
+        this.init();
+    }
+    init() {
+        this.newToggle('AutoReload', 'J');
+        this.modules.push(new AutoAim());
+        this.modules.push(new AutoBHop());
+        const initInfoBoxInterval = setInterval(() => {
+            if (this.canInjectInfoBox()) {
+                clearInterval(initInfoBoxInterval);
+                this.injectInfoBox();
+                this.updateInfoBox();
+                window.addEventListener("keydown", event => this.onKeyDown(event));
+            }
+        }, 100);
+    }
+
+    inputsTick(self, inputs, world) {
+        //Hooked
+        if (this.control && this.exports && self && inputs && world) {
+            this.self = self;
+            this.inputs = inputs;
+            this.world = world;
+            this.weapons = this.exports.c[22].exports;
+            this.server = this.exports.c[7].exports;
+            for (var i = 0, len = this.modules.length; i < len; i++) {
+                if (this.modules[i].index == 0) continue;
+                this.modules[i].me = this.self;
+                this.modules[i].inputs = this.inputs;
+                this.modules[i].control = this.control;
+                this.modules[i].players = this.world.players.list;
+                this.modules[i].onTick();
+            }
+            for (i = 0, len = this.toggles.length; i < len; i++) {
+                if (this.toggles[i].state == 0) continue;
+                switch (this.toggles[i].name) {
+                    case 'AutoReload':
+                        (inputs[9] = self.ammos[self.weaponIndex] === 0);
+                        break;
+                }
+            }
+        }
+    }
+
+    controlTick(control) {
+        //Hooked
+        if (control) {
+            this.control = control;
+            const half = Math.PI / 2;
+            if (control.target) {
+                control.object.rotation.y = control.target.yD;
+                control.pitchObject.rotation.x = control.target.xD;
+                control.pitchObject.rotation.x = Math.max(-half, Math.min(half, control.pitchObject.rotation.x));
+                control.yDr = control.pitchObject.rotation.x % Math.PI;
+                control.xDr = control.object.rotation.y % Math.PI;
+            }
+        }
+    }
+
+    newToggle(name, key) {
+        const toggle_t = cStruct('name', 'key', 'state', 'updated')
+        this.toggles.push(toggle_t(name, key, parseInt(window.getSavedVal("utilities_"+name) || 0), true));
+    }
+
+    onKeyDown(event) {
+        const key = event.key.toUpperCase();
+        const menu = document.getElementById("InfoBox");
+        if (document.activeElement.tagName === "INPUT") return;
+        switch (key) {
+            case '0':
+                if (menu) menu.style.display = !menu.style.display || menu.style.display === "inline-block" ? "none" : "inline-block";
+                break;
+            case 'DELETE':
+                this.resetSettings();
+                break;
+        default:
+            for (const module of this.modules) {
+                if (this.upperCase(module.getKey()) === key) {
+                    module.onKeyPressed();
+                    this.updateInfoBox();
+                }
+            }
+            for (const toggle of this.toggles) {
+                if (this.upperCase(toggle.key) === key) {
+                    toggle.state ^= 1;
+                    this.updateInfoBox();
+                    window.saveVal("utilities_"+toggle.name, toggle.state);
+                }
+            }
+                break;
+        }
+    }
+    upperCase(str) {
+        return str.toUpperCase();
+    }
+    toProperCase(str) {
+        str = str.replace(/([a-z\xE0-\xFF])([A-Z\xC0\xDF])/g, '$1 $2');
+        str = str.replace(/\s[a-z]/g, this.upperCase)
+        return str;
+    }
+    updateInfoBox() {
+        const infoBox = window.document.querySelector('#InfoBox');
+        if (infoBox === null) {
+            return;
+        }
+        const moduleLines = this.modules.map(module => {
+            return '<div class="leaderItem"> <div class="leaderNameF">['+ module.getKey().toUpperCase()+']' + module.getName() + '</div> <div class="leaderScore">'+module.getState()+'</div> </div>';
+        });
+        const togglelines = this.toggles.map(toggle => {
+            return '<div class="leaderItem"> <div class="leaderNameF">[' + toggle.key.toUpperCase() + '] ' + this.toProperCase(toggle.name) + '</div> <div class="leaderScore">' + (toggle.state ? 'On' : 'Off') + '</div> </div>';
+        });
+        infoBox.innerHTML = '<div class="Title">KrunkVillian</div>' + moduleLines.join('').trim() + togglelines.join('').trim();
+    }
+    injectInfoBox() {
+        const infoBox = window.document.createElement('div');
+        infoBox.innerHTML = '<div> <style> #InfoBox { text-align: left; width: 310px; z-index: 3; padding: 10px; padding-left: 20px; padding-right: 20px; color: rgba(255, 255, 255, 0.7); line-height: 25px; margin-top: 0px; background-color: rgba(0, 0, 0, 200); } #InfoBox .Title { font-size: 18px; font-weight: bold; text-align: center; color: #2196F3; margin-top: 5px; margin-bottom: 5px; } #InfoBox .leaderItem { font-size: 14px; } </style> <div id="InfoBox"></div> </div>'.trim();
+        const leaderDisplay = window.document.querySelector('#leaderDisplay');
+        leaderDisplay.parentNode.insertBefore(infoBox.firstChild, leaderDisplay.nextSibling);
+    }
+    canInjectInfoBox() {
+        return window.document.querySelector('#leaderDisplay') !== null;
+    }
+    lookAt(target) {
+        this.camLookAt(target.x2, target.y2 + target.height - 1.5 - 2.5 * target.crouchVal - this.self.recoilAnimY * 0.3 * this.getDistance(this.self, target) / 10, target.z2);
+    }
+    getDistance3D(fromX, fromY, fromZ, toX, toY, toZ) {
+        var distX = fromX - toX,
+            distY = fromY - toY,
+            distZ = fromZ - toZ;
+        return Math.sqrt(distX * distX + distY * distY + distZ * distZ)
+    }
+    getDistance(player1, player2) {
+        return this.getDistance3D(player1.x, player1.y, player1.z, player2.x, player2.y, player2.z);
+    }
+    getDirection(fromZ, fromX, toZ, toX) {
+        return Math.atan2(fromX - toX, fromZ - toZ)
+    }
+    getXDir(fromX, fromY, fromZ, toX, toY, toZ) {
+        var dirY = Math.abs(fromY - toY),
+            dist = this.getDistance3D(fromX, fromY, fromZ, toX, toY, toZ);
+        return Math.asin(dirY / dist) * (fromY > toY ? -1 : 1)
+    }
+    camLookAt(X, Y, Z) {
+        var xdir = this.getXDir(this.control.object.position.x, this.control.object.position.y, this.control.object.position.z, X, Y, Z),
+            ydir = this.getDirection(this.control.object.position.z, this.control.object.position.x, Z, X),
+            camChaseDst = this.server.camChaseDst;
+        this.control.target = {
+            xD: xdir,
+            yD: ydir,
+            x: X + camChaseDst * Math.sin(ydir) * Math.cos(xdir),
+            y: Y - camChaseDst * Math.sin(xdir),
+            z: Z + camChaseDst * Math.cos(ydir) * Math.cos(xdir)
+        }
+    }
+    //moveCam(Y, X, Z) {
+    //    this.object.position.set(Y, X, Z), t.camera.updateProjectionMatrix(), t.updateFrustum()
+    //}
+    //rotateCam = function(Y, X, Z) {
+    //        t.camera.rotation.y = Y, t.camera.rotation.x = X, t.camera.rotation.z = Z
+    //   },
+}`
+
+class Logger {
+    constructor(prefix) {
+        this.prefix = prefix;
+    }
+    log(...message) {
+        console.log(this.prefix, ...message);
+    }
+    dump(...message) {
+        console.dir(message);
+    }
+    error(...message) {
+        console.error(this.prefix, ...message);
+    }
+    crash(message) {
+        document.open();
+        document.write('<html lang="en"> <head> <title>KrunkVillian has crashed!</title> <style> .container { position: absolute; top: 50%; left: 50%; -moz-transform: translateX(-50%) translateY(-50%); -webkit-transform: translateX(-50%) translateY(-50%); transform: translateX(-50%) translateY(-50%); text-align: center; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol"; } .title { font-size: 24px; font-weight: bold; margin-bottom: 5px; } .message { font-size: 20px; } </style> </head> <body> <div class="container"> <div class="title">KrunkVillian has crashed!</div> <div class="message">Error message: '+message+'</div> </div> </body> </html>');
+        document.close();
+        throw new Error(this.prefix + ' ' + message);
+    }
+}
+const logger = new Logger('[KrunkVillian]');
+
+function read(url) {
+    return new Promise(resolve => {
+        fetch(url).then(res => res.text()).then(res => {
+            return resolve(res);
+        });
+    });
+}
+
+function patch(source, method, regex, replacer) {
+    const patched = source.replace(regex, replacer);
+    if (source === patched) {
+        alert('Failed to patch '+method);
+    } else logger.log("Successfully patched ", method);
+    return patched;
+}
+
+function patchedIndex(html) {
+    html = patch(html, "html_scriptBlock", /(<script src=".*?game.*?")(><\/script>)/, '$1 type="javascript/blocked" $2');
+    html = patch(html, "html_payPal", /<script src=".*?paypal.*?"><\/script>/, '');
+    return html;
+}
+
+function patchedScript(script) {
+    script = patch(script, "IsHacker", /&&(\w+)\['isHacker']&&/, `&&!1&&`);
+    script = patch(script, "LastHack", /&&(\w+)\['lastHack']&&/, `&&!1&&`);
+    script = patch(script, 'WallHack', /if\(!tmpObj\['inView']\)continue;/, ``);
+    script = patch(script, "Exports", /(\['__CANCEL__']=!(\w+),(\w+)\['exports']=(\w+);},function\((\w+),(\w+),(\w+)\){)(let)/, `$1window.utilities = new KrunkVillian();window.utilities.exports=$7;$8`);
+    script = patch(script, 'ProcInput', /this\['procInputs']=function\((\w+),(\w+),(\w+)\){/, `this['procInputs']=function($1,$2,$3){window.utilities.inputsTick(this,$1,$2);`);
+    script = patch(script, 'ControlTick', /{if\(this\['target']\){(.+?)}},this\['(\w+)']=/, `{window.utilities.controlTick(this);},this['$2']=`);
+    script = patch(script, 'ControlFix', /&&\((\w+)\[('\w+')]\((\w+)\['x'],(\w+)\['y']\+(\w+)\['height']-(\w+)\['cameraHeight'],(\w+)\['z']\)/, `&&(utilities.camLookAt($3.x,$3.y+$3.height-$6.cameraHeight,$3.z)`);
+    return script;
+}
+
+async function wait(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function loadScript(url) {
+    return new Promise(resolve => {
+        window.$.getScript( url, function( data, textStatus, jqxhr ) {
+        console.log( data ); // Data returned
+        console.log( textStatus ); // Success
+        console.log( jqxhr.status ); // 200
+        resolve(jqxhr.status);
+        });
+    });
+}
+
+(async function () {
+    const index = await read(document.location.href);
+    const build = index.match(/(?<=build=)[^"]+/)[0];
+    const script = await read(`/js/game.${build}.js`);
+    //window.$('script').last().remove();
+    await loadScript("https://cdnjs.cloudflare.com/ajax/libs/js-beautify/1.7.5/beautify.js");
+    krunkVillian += window.js_beautify(patchedScript(script));
+    saveAs(new Blob([krunkVillian], {type: "text/plain;charset=utf-8"}), `game.${build}.js%3build=${build}`);
+    //window.$.globalEval(krunkVillian);
+    //console.log(krunkVillian);
+})();
